@@ -11,6 +11,7 @@
 // @icon         https://www.bilibili.com/favicon.ico
 // @grant        none
 // @run-at       document-start
+// @license      MIT
 // ==/UserScript==
 
 (function() {
