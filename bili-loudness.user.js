@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili 视频音量均衡器
 // @namespace    http://tampermonkey.net/
-// @version      0.1
+// @version      0.1.1
 // @description  通过 Web Audio API 压缩 Bilibili 视频中音频的动态范围，使不同视频或同一视频中差距过大的响度保持一致
 // @author       Timothy Tao & Github Copilot
 // @match        *://www.bilibili.com/video/*
@@ -132,7 +132,10 @@
 
     // 更新音频连接图
     function updateAudioGraph() {
-        if (!sourceNode || !audioCtx) return;
+        if (!sourceNode || !audioCtx) {
+            console.warn('[Bilibili Loudness Equalizer] Cannot update audio graph: source or context missing');
+            return;
+        }
 
         try {
             // 先断开所有连接
@@ -141,16 +144,28 @@
             // 忽略断开连接时的错误
         }
 
-        if (isEnabled) {
-            // 开启模式：Source -> Compressor -> Gain -> Destination
-            // Compressor -> Gain -> Destination 已经在 initAudioContext 中连接好了
-            // 这里只需要连接 Source -> Compressor
-            sourceNode.connect(compressorNode);
-            console.log('[Bilibili Loudness Equalizer] Enabled: Source -> Compressor');
-        } else {
-            // 关闭模式：Source -> Destination (直通)
-            sourceNode.connect(audioCtx.destination);
-            console.log('[Bilibili Loudness Equalizer] Disabled: Source -> Destination');
+        try {
+            if (isEnabled) {
+                // 开启模式：Source -> Compressor -> Gain -> Destination
+                // Compressor -> Gain -> Destination 已经在 initAudioContext 中连接好了
+                // 这里只需要连接 Source -> Compressor
+                sourceNode.connect(compressorNode);
+                console.log('[Bilibili Loudness Equalizer] Enabled: Source -> Compressor -> Gain -> Destination');
+            } else {
+                // 关闭模式：Source -> Destination (直通)
+                sourceNode.connect(audioCtx.destination);
+                console.log('[Bilibili Loudness Equalizer] Disabled: Source -> Destination (bypass)');
+            }
+        } catch (err) {
+            console.error('[Bilibili Loudness Equalizer] Error updating audio graph:', err);
+            // 如果连接失败，至少确保有声音输出（直通模式）
+            try {
+                sourceNode.disconnect();
+                sourceNode.connect(audioCtx.destination);
+                console.log('[Bilibili Loudness Equalizer] Fallback to direct connection');
+            } catch (fallbackErr) {
+                console.error('[Bilibili Loudness Equalizer] Fallback connection failed:', fallbackErr);
+            }
         }
         
         // 确保按钮状态同步
@@ -201,22 +216,28 @@
         currentVideoElement = video;
         console.log('[Bilibili Loudness Equalizer] New video element detected:', video);
 
-        // 确保 video 允许跨域音频数据 (Web Audio API 需要)
-        // 注意：修改 crossOrigin 可能会导致视频重新加载，但在 Bilibili 上通常流媒体已经支持
-        if (!video.crossOrigin) {
-            video.crossOrigin = "anonymous";
-        }
-
         initAudioContext();
 
-        try {
-            // 创建媒体源节点
-            sourceNode = audioCtx.createMediaElementSource(video);
-            // 根据当前状态连接
-            updateAudioGraph();
-        } catch (err) {
-            // 有时如果 video 已经被其他节点连接过，再次 createMediaElementSource 会报错
-            console.error('[Bilibili Loudness Equalizer] Error connecting audio source:', err);
+        // 等待视频元数据加载完成再处理音频
+        const setupAudio = () => {
+            try {
+                // 创建媒体源节点
+                sourceNode = audioCtx.createMediaElementSource(video);
+                // 根据当前状态连接
+                updateAudioGraph();
+                console.log('[Bilibili Loudness Equalizer] Audio graph connected successfully.');
+            } catch (err) {
+                // 有时如果 video 已经被其他节点连接过，再次 createMediaElementSource 会报错
+                console.error('[Bilibili Loudness Equalizer] Error connecting audio source:', err);
+            }
+        };
+
+        // 如果视频已经加载了元数据，直接设置
+        if (video.readyState >= 1) {
+            setupAudio();
+        } else {
+            // 否则等待 loadedmetadata 事件
+            video.addEventListener('loadedmetadata', setupAudio, { once: true });
         }
 
         // 监听播放事件以恢复 AudioContext (浏览器通常禁止自动播放音频上下文)
@@ -226,7 +247,7 @@
                     console.log('[Bilibili Loudness Equalizer] AudioContext resumed.');
                 });
             }
-        });
+        }, { once: true });
     }
 
     // 观察 DOM 变化，查找 <video> 标签
