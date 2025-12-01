@@ -9,7 +9,7 @@
 ## 安装方法
 
 1.  安装浏览器插件 [**Tampermonkey** (油猴)](https://www.tampermonkey.net)，也基本支持其他同类型插件。
-2.  [点击这里安装脚本](#) (替换为你的 Greasy Fork 发布链接)。
+2.  [点击这里安装脚本](https://greasyfork.org/zh-CN/scripts/557295-bilibili-%E8%A7%86%E9%A2%91%E9%9F%B3%E9%87%8F%E5%9D%87%E8%A1%A1%E5%99%A8)
 3.  打开任意 bilibili 视频页面刷新即可生效。
 
 ## 原理说明
@@ -21,7 +21,3 @@
 **DynamicsCompressor**: 将超过阈值的大音量部分进行压缩，减小最大音量和最小音量的差距。
 
 **Gain**: 对处理后的整体信号进行增益补偿，从而在不失真的前提下提升整体响度。
-
-## 许可证
-
-MIT License
