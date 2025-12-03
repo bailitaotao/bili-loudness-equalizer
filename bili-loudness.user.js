@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili 视频音量均衡器
 // @namespace    http://tampermonkey.net/
-// @version      0.1.1
+// @version      0.1.2
 // @description  通过 Web Audio API 压缩 Bilibili 视频中音频的动态范围，使不同视频或同一视频中差距过大的响度保持一致
 // @author       Timothy Tao & Github Copilot
 // @match        *://www.bilibili.com/video/*
