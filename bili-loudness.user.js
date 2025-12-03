@@ -241,13 +241,29 @@
         }
 
         // 监听播放事件以恢复 AudioContext (浏览器通常禁止自动播放音频上下文)
-        video.addEventListener('play', () => {
+        const resumeAudioContext = () => {
             if (audioCtx.state === 'suspended') {
                 audioCtx.resume().then(() => {
                     console.log('[Bilibili Loudness Equalizer] AudioContext resumed.');
                 });
             }
-        }, { once: true });
+        };
+        
+        video.addEventListener('play', resumeAudioContext);
+        // 某些情况下切换全屏可能不会触发 play，但会触发 playing
+        video.addEventListener('playing', resumeAudioContext);
+
+        // 监听视频尺寸变化 (覆盖网页全屏、剧场模式等)
+        let resizeTimeout;
+        const resizeObserver = new ResizeObserver(() => {
+            // 防抖，避免频繁触发
+            clearTimeout(resizeTimeout);
+            resizeTimeout = setTimeout(() => {
+                console.log('[Bilibili Loudness Equalizer] Video resize detected.');
+                handleFullscreenChange();
+            }, 500);
+        });
+        resizeObserver.observe(video);
     }
 
     // 观察 DOM 变化，查找 <video> 标签
@@ -276,6 +292,21 @@
         }
     });
 
+    // 监听全屏变化事件
+    function handleFullscreenChange() {
+        console.log('[Bilibili Loudness Equalizer] Fullscreen change detected.');
+        // 延迟一点时间，等待 DOM 稳定
+        setTimeout(() => {
+            if (audioCtx && audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+            // 重新连接音频图，确保连接没有断开
+            updateAudioGraph();
+            // 确保按钮存在
+            tryAddControlBtn();
+        }, 500);
+    }
+
     // 开始观察
     function startObserving() {
         const target = document.body; // 监听整个 body，因为 Bilibili 是 SPA
@@ -292,6 +323,12 @@
         
         // 尝试添加按钮
         tryAddControlBtn();
+
+        // 监听全屏事件
+        document.addEventListener('fullscreenchange', handleFullscreenChange);
+        document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+        document.addEventListener('mozfullscreenchange', handleFullscreenChange);
+        document.addEventListener('MSFullscreenChange', handleFullscreenChange);
     }
 
     // 页面加载完成后启动
