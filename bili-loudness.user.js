@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bilibili 视频音量均衡器
 // @namespace    http://tampermonkey.net/
-// @version      0.1.2
+// @version      0.2.0
 // @description  通过 Web Audio API 压缩 Bilibili 视频中音频的动态范围，使不同视频或同一视频中差距过大的响度保持一致
 // @author       Timothy Tao & Github Copilot
 // @match        *://www.bilibili.com/video/*
@@ -17,329 +17,153 @@
 (function() {
     'use strict';
 
-    console.log('[Bilibili Loudness Equalizer] Script started.');
+    // ==================== 全局状态 ====================
+    const $ = s => document.querySelector(s);
+    let audioCtx, sourceNode, compressorNode, gainNode, currentVideo;
+    let isEnabled = true;  // 均衡器开关状态
 
-    let audioCtx;
-    let sourceNode;
-    let compressorNode;
-    let gainNode;
-    let currentVideoElement = null;
-    let isEnabled = true; // 默认开启
-
-    // 添加样式
-    function addStyles() {
-        const style = document.createElement('style');
-        style.textContent = `
-            @keyframes bili-eq-bounce {
-                0% { transform: scaleY(1); }
-                50% { transform: scaleY(1.6); }
-                100% { transform: scaleY(1); }
-            }
-            .bili-loudness-btn {
-                color: hsla(0,0%,100%,.8); /* Bilibili 默认图标颜色 */
-                transition: color 0.3s;
-            }
-            .bili-loudness-btn:hover {
-                color: #fff;
-            }
-            .bili-loudness-btn.active {
-                color: #00a1d6 !important; /* 开启时蓝色 */
-            }
-            .bili-loudness-btn svg {
-                fill: currentColor; /* 跟随文字颜色 */
-            }
-            .bili-loudness-btn .bar {
-                transform-origin: center bottom; /* 底部对齐缩放 */
-                transform-box: fill-box; /* 确保变换基于路径自身 */
-            }
-            .bili-loudness-btn.animating .bar {
-                animation: bili-eq-bounce 0.4s ease-in-out;
-            }
-            .bili-loudness-btn.animating .bar-1 { animation-delay: 0s; }
-            .bili-loudness-btn.animating .bar-2 { animation-delay: 0.1s; }
-            .bili-loudness-btn.animating .bar-3 { animation-delay: 0.2s; }
-        `;
-        document.head.appendChild(style);
-    }
-
-    // 图标 SVG (分离的波形图)
-    const iconSvg = `
-        <svg viewBox="0 0 22 22" width="22" height="22" xmlns="http://www.w3.org/2000/svg">
-            <path class="bar bar-1" d="M6 15V7C6 6.44772 5.55228 6 5 6C4.44772 6 4 6.44772 4 7V15C4 15.5523 4.44772 16 5 16C5.55228 16 6 15.5523 6 15Z" fill="currentColor"/>
-            <path class="bar bar-2" d="M12 18V4C12 3.44772 11.5523 3 11 3C10.4477 3 10 3.44772 10 4V18C10 18.5523 10.4477 19 11 19C11.5523 19 12 18.5523 12 18Z" fill="currentColor"/>
-            <path class="bar bar-3" d="M18 13V9C18 8.44772 17.5523 8 17 8C16.4477 8 16 8.44772 16 9V13C16 13.5523 16.4477 14 17 14C17.5523 14 18 13.5523 18 13Z" fill="currentColor"/>
-        </svg>
+    // ==================== 样式定义 ====================
+    // 按钮样式 & 波形跳动动画
+    const style = document.createElement('style');
+    style.textContent = `
+        @keyframes bili-eq-bounce { 50% { transform: scaleY(1.6) } }
+        .bili-loudness-btn { color: hsla(0,0%,100%,.8); transition: color .3s; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; margin-right: 8px }
+        .bili-loudness-btn:hover { color: #fff }
+        .bili-loudness-btn.active { color: #00a1d6 !important }
+        .bili-loudness-btn .bar { transform-origin: center bottom; transform-box: fill-box }
+        .bili-loudness-btn.animating .bar { animation: bili-eq-bounce .4s ease-in-out }
+        .bili-loudness-btn.animating .bar-2 { animation-delay: .1s }
+        .bili-loudness-btn.animating .bar-3 { animation-delay: .2s }
     `;
 
-    // 尝试添加控制按钮到播放器控制栏
-    function tryAddControlBtn() {
-        // 如果按钮已存在，直接返回
-        if (document.querySelector('.bili-loudness-btn')) return;
+    // 均衡器图标 SVG (三条波形柱)
+    const iconSvg = `<svg viewBox="0 0 22 22" width="22" height="22"><path class="bar bar-1" d="M6 15V7a1 1 0 10-2 0v8a1 1 0 102 0z" fill="currentColor"/><path class="bar bar-2" d="M12 18V4a1 1 0 10-2 0v14a1 1 0 102 0z" fill="currentColor"/><path class="bar bar-3" d="M18 13V9a1 1 0 10-2 0v4a1 1 0 102 0z" fill="currentColor"/></svg>`;
 
-        // 查找控制栏右侧容器 (兼容新旧版播放器)
-        const rightControl = document.querySelector('.bpx-player-control-bottom-right') || 
-                             document.querySelector('.bilibili-player-video-control-bottom-right');
-        
-        if (rightControl) {
-            const btn = document.createElement('div');
-            btn.className = 'bpx-player-ctrl-btn bili-loudness-btn';
-            btn.style.cssText = 'display: inline-flex; align-items: center; justify-content: center; cursor: pointer; margin-right: 8px;';
-            btn.innerHTML = iconSvg;
-            
-            // 添加提示 (Tooltip)
-            btn.setAttribute('aria-label', '音量均衡');
-            btn.title = isEnabled ? '音量均衡: 开' : '音量均衡: 关';
-
-            btn.onclick = () => {
-                isEnabled = !isEnabled;
-                updateBtnState(btn);
-                updateAudioGraph();
-                
-                // 触发动画
-                btn.classList.remove('animating');
-                void btn.offsetWidth; // 触发重绘
-                btn.classList.add('animating');
-            };
-
-            // 插入位置：优先放在音量前面，否则直接追加到末尾
-            const anchor = rightControl.querySelector('.bpx-player-ctrl-volume') || 
-                           rightControl.querySelector('.bilibili-player-video-btn-volume');
-            
-            if (anchor) {
-                rightControl.insertBefore(btn, anchor);
-            } else {
-                rightControl.appendChild(btn);
-            }
-            
-            updateBtnState(btn);
-            console.log('[Bilibili Loudness Equalizer] Control button added.');
+    // ==================== UI 控制 ====================
+    /** 更新按钮的激活状态和提示文字 */
+    function updateBtnState() {
+        const btn = $('.bili-loudness-btn');
+        if (btn) {
+            btn.classList.toggle('active', isEnabled);
+            btn.title = `音量均衡: ${isEnabled ? '开' : '关'}`;
         }
     }
 
-    // 更新按钮状态 (颜色/提示)
-    function updateBtnState(btnElement) {
-        const btn = btnElement || document.querySelector('.bili-loudness-btn');
-        if (!btn) return;
-
-        if (isEnabled) {
-            btn.classList.add('active');
-            btn.title = '音量均衡: 开';
-        } else {
-            btn.classList.remove('active');
-            btn.title = '音量均衡: 关';
-        }
-    }
-
-    // 更新音频连接图
+    // ==================== 音频处理 ====================
+    /** 
+     * 更新音频连接图
+     * 开启时: Source -> Compressor -> Gain -> Destination
+     * 关闭时: Source -> Destination (直通)
+     */
     function updateAudioGraph() {
-        if (!sourceNode || !audioCtx) {
-            console.warn('[Bilibili Loudness Equalizer] Cannot update audio graph: source or context missing');
-            return;
-        }
-
+        if (!sourceNode || !audioCtx) return;
+        try { sourceNode.disconnect() } catch {}
         try {
-            // 先断开所有连接
-            sourceNode.disconnect();
-        } catch (e) {
-            // 忽略断开连接时的错误
+            sourceNode.connect(isEnabled ? compressorNode : audioCtx.destination);
+        } catch {
+            // 连接失败时回退到直通模式
+            try { sourceNode.connect(audioCtx.destination) } catch {}
         }
-
-        try {
-            if (isEnabled) {
-                // 开启模式：Source -> Compressor -> Gain -> Destination
-                // Compressor -> Gain -> Destination 已经在 initAudioContext 中连接好了
-                // 这里只需要连接 Source -> Compressor
-                sourceNode.connect(compressorNode);
-                console.log('[Bilibili Loudness Equalizer] Enabled: Source -> Compressor -> Gain -> Destination');
-            } else {
-                // 关闭模式：Source -> Destination (直通)
-                sourceNode.connect(audioCtx.destination);
-                console.log('[Bilibili Loudness Equalizer] Disabled: Source -> Destination (bypass)');
-            }
-        } catch (err) {
-            console.error('[Bilibili Loudness Equalizer] Error updating audio graph:', err);
-            // 如果连接失败，至少确保有声音输出（直通模式）
-            try {
-                sourceNode.disconnect();
-                sourceNode.connect(audioCtx.destination);
-                console.log('[Bilibili Loudness Equalizer] Fallback to direct connection');
-            } catch (fallbackErr) {
-                console.error('[Bilibili Loudness Equalizer] Fallback connection failed:', fallbackErr);
-            }
-        }
-        
-        // 确保按钮状态同步
         updateBtnState();
     }
 
-    // 初始化 AudioContext
+    /** 
+     * 初始化 Web Audio API 上下文
+     * 创建压缩器节点 (降低动态范围) 和增益节点 (补偿音量)
+     */
     function initAudioContext() {
-        if (!audioCtx) {
-            const AudioContext = window.AudioContext || window.webkitAudioContext;
-            audioCtx = new AudioContext();
-            
-            // 创建压缩器节点 (DynamicsCompressorNode)
-            // 作用：降低大音量的部分，保留小音量的部分，从而减小动态范围
-            compressorNode = audioCtx.createDynamicsCompressor();
-            compressorNode.threshold.setValueAtTime(-50, audioCtx.currentTime); // 阈值：超过 -50dB 开始压缩
-            compressorNode.knee.setValueAtTime(40, audioCtx.currentTime);       // 拐点：平滑过渡
-            compressorNode.ratio.setValueAtTime(12, audioCtx.currentTime);      // 比率：压缩比 12:1
-            compressorNode.attack.setValueAtTime(0, audioCtx.currentTime);      // 启动时间：立即响应
-            compressorNode.release.setValueAtTime(0.25, audioCtx.currentTime);  // 释放时间
+        if (audioCtx) return;
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        
+        // 动态压缩器: 将大音量压缩，小音量保留
+        compressorNode = audioCtx.createDynamicsCompressor();
+        compressorNode.threshold.value = -50;   // 阈值 -50dB，超过即压缩
+        compressorNode.knee.value = 40;         // 拐点，平滑过渡
+        compressorNode.ratio.value = 12;        // 压缩比 12:1
+        compressorNode.attack.value = 0;        // 启动时间，立即响应
+        compressorNode.release.value = 0.25;    // 释放时间
 
-            // 创建增益节点 (GainNode)
-            // 作用：因为压缩器降低了整体音量，需要用增益把音量补回来 (Makeup Gain)
-            gainNode = audioCtx.createGain();
-            gainNode.gain.setValueAtTime(1.0, audioCtx.currentTime); // 初始增益，可以根据需要调整，例如 2.0 或 3.0
-
-            // 连接处理链: Compressor -> Gain -> Destination (扬声器)
-            compressorNode.connect(gainNode);
-            gainNode.connect(audioCtx.destination);
-            
-            console.log('[Bilibili Loudness Equalizer] AudioContext initialized.');
-        }
+        // 增益节点: 补偿压缩后的音量损失
+        gainNode = audioCtx.createGain();
+        compressorNode.connect(gainNode).connect(audioCtx.destination);
     }
 
-    // 处理视频元素
-    function processVideoElement(video) {
-        if (currentVideoElement === video) return; // 已经处理过该元素
-        
-        // 如果之前有连接其他视频，先断开（虽然 Bilibili 通常是销毁旧的 video 标签）
-        if (sourceNode) {
-            try {
-                sourceNode.disconnect();
-            } catch (e) {
-                console.warn('[Bilibili Loudness Equalizer] Failed to disconnect old source:', e);
-            }
-        }
+    // ==================== 播放器集成 ====================
+    /** 向 Bilibili 播放器控制栏添加均衡器开关按钮 */
+    function tryAddControlBtn() {
+        if ($('.bili-loudness-btn')) return;
+        // 兼容新版 bpx 播放器和旧版播放器
+        const rightControl = $('.bpx-player-control-bottom-right, .bilibili-player-video-control-bottom-right');
+        if (!rightControl) return;
 
-        currentVideoElement = video;
-        console.log('[Bilibili Loudness Equalizer] New video element detected:', video);
+        const btn = document.createElement('div');
+        btn.className = 'bpx-player-ctrl-btn bili-loudness-btn';
+        btn.innerHTML = iconSvg;
+        btn.onclick = () => {
+            isEnabled = !isEnabled;
+            updateAudioGraph();
+            // 触发波形跳动动画
+            btn.classList.remove('animating');
+            void btn.offsetWidth;  // 强制重绘
+            btn.classList.add('animating');
+        };
 
+        // 插入到音量按钮前面
+        const anchor = rightControl.querySelector('.bpx-player-ctrl-volume, .bilibili-player-video-btn-volume');
+        anchor ? rightControl.insertBefore(btn, anchor) : rightControl.appendChild(btn);
+        updateBtnState();
+    }
+
+    // ==================== 视频处理 ====================
+    /** 捕获视频元素并接入音频处理链 */
+    function processVideo(video) {
+        if (currentVideo === video) return;
+        try { sourceNode?.disconnect() } catch {}
+        currentVideo = video;
         initAudioContext();
 
-        // 等待视频元数据加载完成再处理音频
-        const setupAudio = () => {
+        // 创建媒体源节点并连接处理链
+        const setup = () => {
             try {
-                // 创建媒体源节点
                 sourceNode = audioCtx.createMediaElementSource(video);
-                // 根据当前状态连接
                 updateAudioGraph();
-                console.log('[Bilibili Loudness Equalizer] Audio graph connected successfully.');
-            } catch (err) {
-                // 有时如果 video 已经被其他节点连接过，再次 createMediaElementSource 会报错
-                console.error('[Bilibili Loudness Equalizer] Error connecting audio source:', err);
-            }
+            } catch {}
         };
 
-        // 如果视频已经加载了元数据，直接设置
-        if (video.readyState >= 1) {
-            setupAudio();
-        } else {
-            // 否则等待 loadedmetadata 事件
-            video.addEventListener('loadedmetadata', setupAudio, { once: true });
-        }
+        // 等待视频元数据加载完成
+        video.readyState >= 1 ? setup() : video.addEventListener('loadedmetadata', setup, { once: true });
 
-        // 监听播放事件以恢复 AudioContext (浏览器通常禁止自动播放音频上下文)
-        const resumeAudioContext = () => {
-            if (audioCtx.state === 'suspended') {
-                audioCtx.resume().then(() => {
-                    console.log('[Bilibili Loudness Equalizer] AudioContext resumed.');
-                });
-            }
-        };
-        
-        video.addEventListener('play', resumeAudioContext);
-        // 某些情况下切换全屏可能不会触发 play，但会触发 playing
-        video.addEventListener('playing', resumeAudioContext);
-
-        // 监听视频尺寸变化 (覆盖网页全屏、剧场模式等)
-        let resizeTimeout;
-        const resizeObserver = new ResizeObserver(() => {
-            // 防抖，避免频繁触发
-            clearTimeout(resizeTimeout);
-            resizeTimeout = setTimeout(() => {
-                console.log('[Bilibili Loudness Equalizer] Video resize detected.');
-                handleFullscreenChange();
-            }, 500);
-        });
-        resizeObserver.observe(video);
+        // 用户交互后恢复被浏览器暂停的 AudioContext
+        const resume = () => audioCtx?.state === 'suspended' && audioCtx.resume();
+        video.addEventListener('play', resume);
+        video.addEventListener('playing', resume);
     }
 
-    // 观察 DOM 变化，查找 <video> 标签
-    const observer = new MutationObserver((mutations) => {
-        // 每次 DOM 变化都尝试添加按钮 (因为播放器可能会重绘)
+    // ==================== DOM 监听 ====================
+    // 监听 DOM 变化，自动处理 SPA 页面切换时的新视频元素
+    const observer = new MutationObserver(() => {
         tryAddControlBtn();
-
-        for (const mutation of mutations) {
-            if (mutation.addedNodes.length) {
-                // 检查新增节点是否是 video
-                for (const node of mutation.addedNodes) {
-                    if (node.nodeName === 'VIDEO') {
-                        processVideoElement(node);
-                        return;
-                    }
-                    // 检查新增节点的子节点是否有 video (例如容器被替换)
-                    if (node.querySelectorAll) {
-                        const video = node.querySelector('video');
-                        if (video) {
-                            processVideoElement(video);
-                            return;
-                        }
-                    }
-                }
-            }
-        }
+        const video = $('video');
+        if (video) processVideo(video);
     });
 
-    // 监听全屏变化事件
-    function handleFullscreenChange() {
-        console.log('[Bilibili Loudness Equalizer] Fullscreen change detected.');
-        // 延迟一点时间，等待 DOM 稳定
-        setTimeout(() => {
-            if (audioCtx && audioCtx.state === 'suspended') {
-                audioCtx.resume();
-            }
-            // 重新连接音频图，确保连接没有断开
-            updateAudioGraph();
-            // 确保按钮存在
-            tryAddControlBtn();
-        }, 500);
-    }
-
-    // 开始观察
-    function startObserving() {
-        const target = document.body; // 监听整个 body，因为 Bilibili 是 SPA
-        observer.observe(target, {
-            childList: true,
-            subtree: true
-        });
-
-        // 检查页面上是否已经存在的 video
-        const existingVideo = document.querySelector('video');
-        if (existingVideo) {
-            processVideoElement(existingVideo);
-        }
-        
-        // 尝试添加按钮
+    // ==================== 初始化入口 ====================
+    function init() {
+        document.head.appendChild(style);
+        observer.observe(document.body, { childList: true, subtree: true });
+        const video = $('video');
+        if (video) processVideo(video);
         tryAddControlBtn();
-
-        // 监听全屏事件
-        document.addEventListener('fullscreenchange', handleFullscreenChange);
-        document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
-        document.addEventListener('mozfullscreenchange', handleFullscreenChange);
-        document.addEventListener('MSFullscreenChange', handleFullscreenChange);
+        // 全屏切换后重新连接音频图并恢复按钮
+        document.addEventListener('fullscreenchange', () => setTimeout(() => {
+            audioCtx?.state === 'suspended' && audioCtx.resume();
+            updateAudioGraph();
+            tryAddControlBtn();
+        }, 300));
     }
 
-    // 页面加载完成后启动
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', () => {
-            addStyles();
-            startObserving();
-        });
-    } else {
-        addStyles();
-        startObserving();
-    }
-
+    // 启动脚本
+    document.readyState === 'loading' 
+        ? document.addEventListener('DOMContentLoaded', init) 
+        : init();
 })();
