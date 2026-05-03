@@ -8,9 +8,19 @@
 
 ## 安装方法
 
+### 使用浏览器脚本安装器（推荐）
+
 1.  安装浏览器插件 [**Tampermonkey** (油猴)](https://www.tampermonkey.net)，也基本支持其他同类型插件。
 2.  [点击这里安装脚本](https://greasyfork.org/zh-CN/scripts/557295-bilibili-%E8%A7%86%E9%A2%91%E9%9F%B3%E9%87%8F%E5%9D%87%E8%A1%A1%E5%99%A8)
 3.  打开任意 bilibili 视频页面刷新即可生效。
+
+### [Bilibili Evolved](https://github.com/the1812/Bilibili-Evolved) 插件版
+
+1. 点击下载插件：[bili-loudness-evolved.js](https://raw.githubusercontent.com/bailitaotao/bili-loudness-equalizer/main/bili-loudness-evolved.js)
+2. 打开任意 b 站页面并呼出 Bilibili Evolved 的设置面板。
+3. 导航至左下角的 **“插件”** 选项卡。
+4. 点击“添加插件”右侧的 **“浏览”**，找到你下载好的插件。
+5. 打开任意 bilibili 视频页面刷新即可生效。
 
 ## 原理说明
 
